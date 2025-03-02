@@ -2,12 +2,11 @@ package master
 
 import (
 	"distributed_cache/client"
+	"distributed_cache/common"
 	"distributed_cache/consistenthash"
 	"log"
 	"sync"
 )
-
-var iLog = true
 
 type Master struct {
 	sync.RWMutex
@@ -25,7 +24,7 @@ func NewMaster(replias int, hash consistenthash.HashFunc) *Master {
 }
 
 func (m *Master) log(format string, v ...any) {
-	if iLog {
+	if common.DEBUG {
 		log.Printf(format, v...)
 	}
 }
@@ -73,6 +72,7 @@ func (m *Master) Delete(addrs ...string) error {
 func (m *Master) Get(serviceName string, key string) ([]byte, error) {
 	m.RLock()
 	defer m.RUnlock()
+	m.log("Master: [GET] service[%s] key[%s]", serviceName, key)
 	peer, err := m.direct(key)
 	if err != nil {
 		return nil, err

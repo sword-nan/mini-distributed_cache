@@ -2,7 +2,7 @@ package cache
 
 import (
 	"bytes"
-	"errors"
+	"distributed_cache/common"
 	"fmt"
 	"sync"
 )
@@ -18,7 +18,7 @@ type LRU struct {
 	maxBytes   int64                  // lru max size
 	key2node   map[string]*linkedNode // hash map
 	linkedList *linkedList            // double linkedList
-	mu         sync.Mutex
+	sync.Mutex
 }
 
 func (lru *LRU) getVictim() *linkedNode {
@@ -33,12 +33,13 @@ func (lru *LRU) remove(key string) {
 }
 
 func (lru *LRU) Get(key string) (Value, error) {
-	lru.mu.Lock()
-	defer lru.mu.Unlock()
+	lru.Lock()
+	defer lru.Unlock()
 	node, ok := lru.key2node[key]
 	if !ok {
-		msg := fmt.Sprintf("key [%s] not found in lru cache", key)
-		return nil, errors.New(msg)
+		// msg := fmt.Sprintf("key [%s] not found in lru cache", key)
+		// errors.New(msg)
+		return nil, common.ErrKeyNotInCache
 	}
 	// move the node to head
 	lru.linkedList.moveToHead(node)
@@ -47,11 +48,12 @@ func (lru *LRU) Get(key string) (Value, error) {
 }
 
 func (lru *LRU) Put(key string, value Value) (err error) {
-	lru.mu.Lock()
-	defer lru.mu.Unlock()
+	lru.Lock()
+	defer lru.Unlock()
 	if entrySize(key, value) > lru.maxBytes {
-		msg := "the entry size is bigger than the cache max bytes"
-		err = errors.New(msg)
+		// msg := "the entry size is bigger than the cache max bytes"
+		// err = errors.New(msg)
+		err = common.ErrCacheCapacityNotEnough
 		return
 	}
 	// key in cache，just update the value
@@ -91,7 +93,8 @@ func (lru *LRU) View() {
 
 func NewLRU(maxBytes int64) (*LRU, error) {
 	if maxBytes <= 0 {
-		return &LRU{}, errors.New("lru maxBytes is must be a positive number")
+		// errors.New("lru maxBytes is must be a positive number")
+		return &LRU{}, common.ErrPositiveParamNegative
 	}
 	return &LRU{
 		maxBytes:   maxBytes,
@@ -115,17 +118,18 @@ type LRUK struct {
 	historyCounter map[string]int // record the count of the node access
 	lru1           *LRU
 	lru2           *LRU
-	sync.Mutex
+	sync.RWMutex
 }
 
 func NewLRUK(maxBytes int64, k int) (*LRUK, error) {
 	if maxBytes <= 0 || k <= 0 {
-		msg := fmt.Sprintf(
-			`cache maxBytes, threshold-k must be positive, but you give the maxBytes[%d] k[%d]`,
-			maxBytes,
-			k,
-		)
-		return &LRUK{}, errors.New(msg)
+		// msg := fmt.Sprintf(
+		// 	`cache maxBytes, threshold-k must be positive, but you give the maxBytes[%d] k[%d]`,
+		// 	maxBytes,
+		// 	k,
+		// )
+		// errors.New(msg)
+		return &LRUK{}, common.ErrPositiveParamNegative
 	}
 
 	cache := LRUK{}
@@ -174,8 +178,9 @@ func (l *LRUK) Get(key string) (Value, error) {
 	defer l.Unlock()
 	count, ok := l.historyCounter[key]
 	if !ok {
-		msg := fmt.Sprintf("the key[%s] not in the cache", key)
-		return nil, errors.New(msg)
+		// msg := fmt.Sprintf("the key[%s] not in the cache", key)
+		// errors.New(msg)
+		return nil, common.ErrKeyNotInCache
 	}
 	var value Value
 	if count < l.k {
@@ -191,7 +196,8 @@ func (l *LRUK) Put(key string, value Value) (err error) {
 	l.Lock()
 	defer l.Unlock()
 	if entrySize(key, value) > l.maxBytes {
-		err = errors.New("the entry size is bigger than the cache max bytes")
+		// err = errors.New("the entry size is bigger than the cache max bytes")
+		err = common.ErrCacheCapacityNotEnough
 		return
 	}
 	if count, ok := l.historyCounter[key]; ok {

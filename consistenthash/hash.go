@@ -1,7 +1,7 @@
 package consistenthash
 
 import (
-	"fmt"
+	"distributed_cache/common"
 	"hash/crc32"
 	"sort"
 	"strconv"
@@ -52,7 +52,7 @@ func (m *Map) deleteIdx(idx int) {
 func (m *Map) Add(peers ...string) error {
 	for _, peer := range peers {
 		if _, ok := m.peers[peer]; ok {
-			return fmt.Errorf("the peer [%s] is existed", peer)
+			return common.ErrPeerRegistered
 		}
 	}
 	for _, peer := range peers {
@@ -74,7 +74,7 @@ func (m *Map) Delete(peers ...string) error {
 	// is all virtual peer existed
 	for _, peer := range peers {
 		if _, ok := m.peers[peer]; !ok {
-			return fmt.Errorf("the peer [%s] not existed", peer)
+			return common.ErrPeerNotRegistered
 		}
 	}
 	// if all existed
@@ -93,7 +93,7 @@ func (m *Map) Delete(peers ...string) error {
 
 func (m *Map) Search(key string) (string, error) {
 	if m.Empty() {
-		return "", fmt.Errorf("has no peers")
+		return "", common.ErrNoPeerRegistered
 	}
 	value := m.hash([]byte(key))
 	idx := m.searchIdx(int(value))
