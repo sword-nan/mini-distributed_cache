@@ -1,10 +1,14 @@
 package service
 
 import (
+	"context"
 	"distributed_cache/cache"
+	"distributed_cache/common"
 	"fmt"
 	"log"
 	"sync"
+
+	"golang.org/x/sync/singleflight"
 )
 
 type Getter interface {
@@ -33,15 +37,22 @@ type Service struct {
 	getter       Getter // call when data not in cache
 	putter       Putter
 	newValueItem cache.NewValue // create the Value interface
+	group        *singleflight.Group
 }
 
 var (
 	mu sync.RWMutex
 	// store many service
 	groups = make(map[string]*Service)
-	// log
-	iLog = true
 )
+
+func ViewServiceGroup() {
+	var services []string
+	for serviceName := range groups {
+		services = append(services, serviceName)
+	}
+	fmt.Println(services)
+}
 
 // create the Service instance
 func NewService(name string, getter Getter, putter Putter, newValueItem cache.NewValue, maxBytes int64, k int) *Service {
@@ -60,6 +71,7 @@ func NewService(name string, getter Getter, putter Putter, newValueItem cache.Ne
 		getter:       getter,
 		putter:       putter,
 		newValueItem: newValueItem,
+		group:        &singleflight.Group{},
 	}
 	mu.Lock()
 	groups[name] = service
@@ -67,8 +79,8 @@ func NewService(name string, getter Getter, putter Putter, newValueItem cache.Ne
 	return service
 }
 
-func (h *Service) Log(format string, v ...any) {
-	if iLog {
+func (h *Service) log(format string, v ...any) {
+	if common.DEBUG {
 		log.Printf(format, v...)
 	}
 }
@@ -82,10 +94,10 @@ func (s *Service) load(key string) ([]byte, error) {
 func (s *Service) getlocally(key string) ([]byte, error) {
 	value, err := s.getter.Get(key)
 	if err != nil {
-		s.Log("[DB not hit], err: %v", err)
+		s.log("service-%s: [DB not hit], err: %v", s.name, err)
 		return nil, err
 	}
-	s.Log("[DB hit] get the value %s of the key %s", value, key)
+	s.log("service-%s: [DB hit] get the value %s of the key %s", s.name, value, key)
 	s.populateCache(key, value)
 	return value, nil
 }
@@ -94,12 +106,12 @@ func (s *Service) getlocally(key string) ([]byte, error) {
 func (s *Service) populateCache(key string, value []byte) {
 	err := s.cache.Put(key, s.newValueItem.New(value))
 	if err != nil {
-		s.Log(err.Error())
+		s.log("service-%s: [ERROR] data[key%s] can't store in cache", s.name, key)
 	}
 }
 
 // Get
-func (s *Service) Get(key string) ([]byte, error) {
+func (s *Service) get(key string) ([]byte, error) {
 	var (
 		value []byte
 		err   error
@@ -110,8 +122,27 @@ func (s *Service) Get(key string) ([]byte, error) {
 	}
 	// cache hit
 	value = cacheEntry.Bytes()
-	s.Log("[Cache hit] get the value %s of the key %s", value, key)
+	s.log("service-%s: [Cache hit] get the value %s of the key %s", s.name, value, key)
 	return value, nil
+}
+
+func (s *Service) Get(key string) ([]byte, error) {
+	doC := s.group.DoChan(key, func() (interface{}, error) {
+		return s.get(key)
+	})
+	ctx, cancel := context.WithTimeout(context.TODO(), common.TimeoutInterval)
+	defer cancel()
+	select {
+	case val := <-doC:
+		return val.Val.([]byte), val.Err
+	case <-ctx.Done():
+		s.log("service-%s: Get key %s timeout", s.name, key)
+		// dead lock!
+		go func() {
+			<-doC
+		}()
+		return nil, common.ErrTimeout
+	}
 }
 
 // Put
@@ -122,12 +153,12 @@ func (s *Service) Put(key string, value []byte) error {
 	if err != nil {
 		return err
 	}
-	s.Log("put [%s, %v] in putter", key, value)
+	// s.log("service-%s: put [%s, %v] in putter", s.name, key, value)
 	err = s.cache.Put(key, s.newValueItem.New(value))
 	if err != nil {
 		return err
 	}
-	s.Log("put [%s, %v] in cache", key, value)
+	s.log("service-%s: put [%s, %v] in cache", s.name, key, value)
 	return nil
 }
 
@@ -140,8 +171,8 @@ func GetService(name string) (*Service, error) {
 	defer mu.RUnlock()
 	Service, ok := groups[name]
 	if !ok {
-		err := fmt.Errorf("the name [%s] not in the Service group", name)
-		return nil, err
+		// err := fmt.Errorf("the name [%s] not in the Service group", name)
+		return nil, common.ErrServiceNotExisted
 	}
 	return Service, nil
 }
